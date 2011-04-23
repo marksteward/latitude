@@ -3,7 +3,9 @@
 import sys, time, ConfigParser
 import oauth.oauth as oauth
 import httplib, urlparse, BaseHTTPServer
+import simplejson as json
 from urllib2 import urlopen, Request
+from urllib import urlencode
 
 """
 http://code.google.com/apis/accounts/docs/OAuth.html
@@ -47,15 +49,13 @@ class OAuthCallbackHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         elif path == '/authorized':
             try:
                 OAUTH.process_authorized(params)
-                auth_token = OAUTH.get_access_token()
+                OAUTH.get_access_token()
             except Exception, e:
                 print 'Authorisation failed: %s' % repr(e)
                 self.send_error(500, 'Authorisation failed: %s' % repr(e))
             else:
-                print 'Got auth token: %s' % auth_token
+                print 'Got auth token: %s' % OAUTH.access_token
                 self.send_response(200, 'Authorised')
-
-            # if started for one-off, self.shutdown()
 
         else:
             self.send_error(404, 'File not found')
@@ -69,6 +69,7 @@ class GoogleOAuthClient():
         self.consumer = consumer
         self.signature_method = sig # TODO: support RSA_SHA1
         self.scopes = []
+        self.access_token = self.req_token = None
 
     def get_request_token(self, callback_url='oob'):
         req = oauth.OAuthRequest.from_consumer_and_token(
@@ -95,8 +96,7 @@ class GoogleOAuthClient():
         req.sign_request(self.signature_method, self.consumer, self.req_token)
 
         f = urlopen(Request(req.to_url()))
-        token = oauth.OAuthToken.from_string(f.read())
-        return token
+        self.access_token = oauth.OAuthToken.from_string(f.read())
 
     def get_auth_url(self):
         raise NotImplementedError
@@ -110,8 +110,11 @@ class LatitudeOAuthClient(GoogleOAuthClient):
     resource_url = 'https://www.googleapis.com/latitude/v1/currentLocation'
     scope_url = 'https://www.googleapis.com/auth/latitude'
 
-    def __init__(self, consumer, sig=oauth.OAuthSignatureMethod_HMAC_SHA1()):
+    def __init__(self, consumer, api_key,
+            sig=oauth.OAuthSignatureMethod_HMAC_SHA1()):
+
         GoogleOAuthClient.__init__(self, consumer, sig=sig)
+        self.api_key = api_key
         self.scopes += [self.scope_url]
 
     def get_auth_url(self, callback_url,
@@ -138,6 +141,21 @@ class LatitudeOAuthClient(GoogleOAuthClient):
             resp = params['latitudeAuthResponse'][0]
             raise Exception('Authorisation failed: %s' % repr(resp))
 
+    def get_location(self):
+        req = oauth.OAuthRequest.from_consumer_and_token(
+            self.consumer,
+            token=self.access_token,
+            http_url=self.resource_url,
+            parameters={
+                'key': self.api_key,
+            }
+        )
+        req.sign_request(self.signature_method, self.consumer, self.access_token)
+
+        
+        f = urlopen(Request(req.to_url()))
+        return json.loads(f.read())
+
 
 if __name__ == '__main__':
 
@@ -153,13 +171,34 @@ if __name__ == '__main__':
         config.get('oauth', 'key'),
         config.get('oauth', 'secret'),
     )
-    OAUTH = LatitudeOAuthClient(consumer)
+    api_key = config.get('oauth', 'api_key')
+    OAUTH = LatitudeOAuthClient(consumer, api_key)
 
-    CALLBACK_BASE = config.get('callback', 'base_url')
-    SERVER = config.get('callback', 'server')
-    PORT = config.getint('callback', 'port')
+    try:
+        access_token = config.get('oauth', 'access_token')
+    except ConfigParser.NoOptionError:
+        CALLBACK_BASE = config.get('callback', 'base_url')
+        server = config.get('callback', 'server')
+        port = config.getint('callback', 'port')
 
-    httpd = BaseHTTPServer.HTTPServer((SERVER, PORT), OAuthCallbackHandler)
-    httpd.serve_forever()
+        httpd = BaseHTTPServer.HTTPServer((server, port), OAuthCallbackHandler)
+        while not OAUTH.access_token:
+            httpd.handle_request()
+
+        config.set('oauth', 'access_token', OAUTH.access_token)
+        with open('latitude.conf', 'wb') as cfg:
+            config.write(cfg)
+
+    else:
+        OAUTH.access_token = oauth.OAuthToken.from_string(access_token)
+
+    loc = OAUTH.get_location()
+    lat, long = loc['data']['latitude'], loc['data']['longitude']
+    latlng = ','.join(map(str, (lat, long)))
+
+    qs = urlencode({'latlng': latlng, 'sensor': 'false'})
+    f = urlopen('http://maps.googleapis.com/maps/api/geocode/json?%s' % qs)
+    resp = json.loads(f.read())
+    print resp['results'][0]['formatted_address']
 
 

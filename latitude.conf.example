@@ -1,6 +1,7 @@
 [oauth]
 secret = keyFromManageYourDomains
 key = domain.tld
+api_key = googleGeneralAPIKeyFromGoogleAPIConsole
 
 [callback]
 server = 
