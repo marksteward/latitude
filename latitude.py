@@ -148,6 +148,7 @@ class LatitudeOAuthClient(GoogleOAuthClient):
             http_url=self.resource_url,
             parameters={
                 'key': self.api_key,
+                'granularity': 'best',
             }
         )
         req.sign_request(self.signature_method, self.consumer, self.access_token)
@@ -195,10 +196,14 @@ if __name__ == '__main__':
     loc = OAUTH.get_location()
     lat, long = loc['data']['latitude'], loc['data']['longitude']
     latlng = ','.join(map(str, (lat, long)))
+    timestamp = loc['data']['timestampMs']
+    accuracy = loc['data'].get('accuracy')
 
     qs = urlencode({'latlng': latlng, 'sensor': 'false'})
     f = urlopen('http://maps.googleapis.com/maps/api/geocode/json?%s' % qs)
     resp = json.loads(f.read())
-    print resp['results'][0]['formatted_address']
+    addr = resp['results'][0]['formatted_address']
+    #print '%s (%s)' % (latlng, addr)
+    print addr
 
 
